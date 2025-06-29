@@ -1,17 +1,19 @@
 import logging
+import os
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters
 import openai
-import os
 
-# Вставь сюда свои токены
-import os
-
+# Получаем токены из переменных окружения
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
+if not TELEGRAM_TOKEN or not OPENAI_API_KEY:
+    raise ValueError("Не найдены TELEGRAM_TOKEN или OPENAI_API_KEY в переменных окружения!")
+
 openai.api_key = OPENAI_API_KEY
 
-# Включаем логирование (необязательно, но удобно)
+# Включаем логирование
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
@@ -24,9 +26,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Обработчик текстовых сообщений
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
-    chat_id = update.message.chat_id
     
-    # Отправляем запрос в OpenAI
     try:
         response = openai.ChatCompletion.create(
             model="gpt-3.5-turbo",
@@ -34,6 +34,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         reply = response['choices'][0]['message']['content']
     except Exception as e:
+        logging.error(f"Ошибка при запросе к OpenAI: {e}")
         reply = "Извини, произошла ошибка при обработке запроса."
 
     await update.message.reply_text(reply)
