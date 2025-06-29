@@ -1,70 +1,156 @@
-import logging
 import os
-from telegram import Update
-from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters
-import openai
-
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-
-if not TELEGRAM_TOKEN or not OPENAI_API_KEY:
-    raise ValueError("TELEGRAM_TOKEN или OPENAI_API_KEY не найдены!")
-
-openai.api_key = OPENAI_API_KEY
-
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
+import random
+import logging
+from datetime import datetime
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import (
+    ApplicationBuilder, ContextTypes, CommandHandler, CallbackQueryHandler, MessageHandler, filters
 )
 
-# Словарь для хранения истории переписки по chat_id
-user_histories = {}
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+if not TELEGRAM_TOKEN:
+    raise ValueError("TELEGRAM_TOKEN не найден!")
 
-MAX_HISTORY_LENGTH = 10  # Максимум последних сообщений для контекста
+logging.basicConfig(level=logging.INFO)
 
+# База вопросов, шуток и загадок
+quiz_questions = [
+    {"question": "Сколько будет 3 + 5?", "answers": ["7", "8", "9"], "correct": "8"},
+    {"question": "Столица Италии?", "answers": ["Рим", "Мадрид", "Париж"], "correct": "Рим"},
+    {"question": "Какой океан самый большой?", "answers": ["Атлантический", "Индийский", "Тихий"], "correct": "Тихий"},
+]
+
+jokes = [
+    "Почему программисты путают Хэллоуин и Рождество? Потому что 31 Oct = 25 Dec.",
+    "Всё ломается. Даже код, который ещё не написал.",
+    "Как зовут программиста-волшебника? Алгоритмович!"
+]
+
+truth_or_lie_statements = [
+    {"statement": "Солнце — звезда.", "truth": True},
+    {"statement": "Человек может дышать под водой без устройств.", "truth": False},
+    {"statement": "Python — это язык программирования.", "truth": True},
+]
+
+riddles = [
+    {"question": "Что можно увидеть с закрытыми глазами?", "answers": ["Сон", "Свет", "Ничего"], "correct": "Сон"},
+    {"question": "Что всегда идёт, но никогда не приходит?", "answers": ["Время", "Поезд", "Эхо"], "correct": "Время"},
+]
+
+# Главное меню
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.chat_id
-    user_histories[user_id] = []
-    await update.message.reply_text("Привет! Я ИИ-бот на базе ChatGPT. Напиши мне что-нибудь!")
+    keyboard = [
+        [InlineKeyboardButton("🎯 Викторина", callback_data="quiz")],
+        [InlineKeyboardButton("😂 Анекдот", callback_data="joke")],
+        [InlineKeyboardButton("⏰ Время", callback_data="time")],
+        [InlineKeyboardButton("🎲 Угадай число", callback_data="guess")],
+        [InlineKeyboardButton("✊ Камень/Ножницы/Бумага", callback_data="rps")],
+        [InlineKeyboardButton("🎲 Бросок кубика", callback_data="dice")],
+        [InlineKeyboardButton("🧠 Правда или ложь", callback_data="truthlie")],
+        [InlineKeyboardButton("🕵 Загадка", callback_data="riddle")],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text("Привет! Выбери действие:", reply_markup=reply_markup)
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.chat_id
-    user_text = update.message.text
+# Обработка кнопок
+async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
 
-    if user_id not in user_histories:
-        user_histories[user_id] = []
+    if query.data == "quiz":
+        question = random.choice(quiz_questions)
+        context.user_data['quiz'] = question
+        buttons = [[InlineKeyboardButton(ans, callback_data=f"answer:{ans}")] for ans in question['answers']]
+        await query.edit_message_text(question['question'], reply_markup=InlineKeyboardMarkup(buttons))
 
-    # Добавляем сообщение пользователя в историю
-    user_histories[user_id].append({"role": "user", "content": user_text})
+    elif query.data.startswith("answer:"):
+        selected = query.data.split(":", 1)[1]
+        question = context.user_data.get('quiz')
+        result = "✅ Верно!" if question and selected == question['correct'] else f"❌ Неправильно. Ответ: {question['correct']}"
+        await query.edit_message_text(result)
 
-    # Обрезаем историю, чтобы не превышать лимит
-    if len(user_histories[user_id]) > MAX_HISTORY_LENGTH:
-        user_histories[user_id] = user_histories[user_id][-MAX_HISTORY_LENGTH:]
+    elif query.data == "joke":
+        await query.edit_message_text(random.choice(jokes))
 
-    try:
-        response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
-            messages=user_histories[user_id],
-            max_tokens=500,
-            temperature=0.7,
-        )
-        reply = response['choices'][0]['message']['content'].strip()
+    elif query.data == "time":
+        now = datetime.now().strftime("%H:%M:%S %d-%m-%Y")
+        await query.edit_message_text(f"Текущее время: {now}")
 
-        # Добавляем ответ бота в историю
-        user_histories[user_id].append({"role": "assistant", "content": reply})
-    except Exception as e:
-        logging.error(f"Ошибка OpenAI: {e}")
-        reply = "Извини, произошла ошибка при обработке запроса."
+    elif query.data == "guess":
+        number = random.randint(1, 5)
+        context.user_data['secret'] = number
+        buttons = [[InlineKeyboardButton(str(n), callback_data=f"guess_number:{n}")] for n in range(1, 6)]
+        await query.edit_message_text("Я загадал число от 1 до 5. Попробуй угадать:", reply_markup=InlineKeyboardMarkup(buttons))
 
-    await update.message.reply_text(reply)
+    elif query.data.startswith("guess_number:"):
+        guess = int(query.data.split(":")[1])
+        secret = context.user_data.get('secret')
+        result = "🎉 Ты угадал!" if guess == secret else f"Нет, я загадал {secret}."
+        await query.edit_message_text(result)
+
+    elif query.data == "rps":
+        buttons = [
+            [InlineKeyboardButton("Камень", callback_data="rps_choice:Камень"),
+             InlineKeyboardButton("Ножницы", callback_data="rps_choice:Ножницы"),
+             InlineKeyboardButton("Бумага", callback_data="rps_choice:Бумага")]
+        ]
+        await query.edit_message_text("Выбери свой ход:", reply_markup=InlineKeyboardMarkup(buttons))
+
+    elif query.data.startswith("rps_choice:"):
+        user_choice = query.data.split(":")[1]
+        bot_choice = random.choice(["Камень", "Ножницы", "Бумага"])
+        outcome = "Ничья!"
+        if (user_choice == "Камень" and bot_choice == "Ножницы") or \
+           (user_choice == "Ножницы" and bot_choice == "Бумага") or \
+           (user_choice == "Бумага" and bot_choice == "Камень"):
+            outcome = "Ты победил!"
+        elif user_choice != bot_choice:
+            outcome = "Бот победил!"
+        await query.edit_message_text(f"Ты выбрал: {user_choice}\nБот выбрал: {bot_choice}\n{outcome}")
+
+    elif query.data == "dice":
+        roll = random.randint(1, 6)
+        await query.edit_message_text(f"Ты бросил кубик и выпало: {roll}")
+
+    elif query.data == "truthlie":
+        statement = random.choice(truth_or_lie_statements)
+        context.user_data['truth'] = statement
+        buttons = [
+            [InlineKeyboardButton("Правда", callback_data="truth_answer:True"),
+             InlineKeyboardButton("Ложь", callback_data="truth_answer:False")]
+        ]
+        await query.edit_message_text(statement['statement'], reply_markup=InlineKeyboardMarkup(buttons))
+
+    elif query.data.startswith("truth_answer:"):
+        user_answer = query.data.split(":")[1] == "True"
+        correct = context.user_data.get('truth', {}).get('truth')
+        result = "✅ Верно!" if user_answer == correct else "❌ Неправильно."
+        await query.edit_message_text(result)
+
+    elif query.data == "riddle":
+        riddle = random.choice(riddles)
+        context.user_data['riddle'] = riddle
+        buttons = [[InlineKeyboardButton(ans, callback_data=f"riddle_answer:{ans}")] for ans in riddle['answers']]
+        await query.edit_message_text(riddle['question'], reply_markup=InlineKeyboardMarkup(buttons))
+
+    elif query.data.startswith("riddle_answer:"):
+        selected = query.data.split(":")[1]
+        riddle = context.user_data.get('riddle')
+        result = "✅ Правильно!" if riddle and selected == riddle['correct'] else f"❌ Нет, ответ: {riddle['correct']}"
+        await query.edit_message_text(result)
+
+async def unknown(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Я тебя не понял. Используй /start для вызова меню.")
 
 def main():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.add_handler(CallbackQueryHandler(handle_buttons))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, unknown))
 
     print("Бот запущен...")
     app.run_polling()
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
