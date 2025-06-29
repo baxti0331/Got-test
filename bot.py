@@ -5,9 +5,10 @@ import openai
 import os
 
 # Вставь сюда свои токены
-TELEGRAM_TOKEN = "7291198714:AAE2x4jpnj0bnfZ300MZww-Du1HH_ZkzeSY"
-OPENAI_API_KEY = "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"
+import os
 
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 openai.api_key = OPENAI_API_KEY
 
 # Включаем логирование (необязательно, но удобно)
