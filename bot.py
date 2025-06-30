@@ -132,14 +132,18 @@ async def answer_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
             page = wikipedia.page(corrected_query)
 
         url = page.url
-        text = f"{msg['result']}\n\n{summary}\n\n🔗 [{msg['more']}]({url})"
+        text = f"{msg['result']}\n\n{summary}"
+
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton(msg['more'], url=url)]
+        ])
 
         image_url = next((img for img in page.images if img.lower().endswith(('.jpg', '.jpeg', '.png'))), None)
 
         if image_url:
-            await update.message.reply_photo(photo=image_url, caption=text, parse_mode="Markdown")
+            await update.message.reply_photo(photo=image_url, caption=text, parse_mode="Markdown", reply_markup=keyboard)
         else:
-            await update.message.reply_text(text, parse_mode="Markdown")
+            await update.message.reply_text(text, parse_mode="Markdown", reply_markup=keyboard)
 
     except wikipedia.exceptions.DisambiguationError as e:
         options = e.options[:5]
