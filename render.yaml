@@ -1,7 +1,7 @@
 services:
   - type: web
-    name: my-telegram-bot
+    name: telegram-bot
     env: python
-    pythonVersion: 3.11
+    pythonVersion: 3.11.7
     buildCommand: ""
     startCommand: "python bot.py"
