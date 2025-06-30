@@ -1,156 +1,244 @@
 import os
-import random
-import logging
-from datetime import datetime
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    ApplicationBuilder, ContextTypes, CommandHandler, CallbackQueryHandler, MessageHandler, filters
-)
+import json
+import threading
+import time
+import schedule
+from datetime import datetime, timedelta
+from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, CallbackContext, MessageHandler, Filters
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-if not TELEGRAM_TOKEN:
-    raise ValueError("TELEGRAM_TOKEN не найден!")
+TOKEN = os.getenv("BOT_TOKEN")
+CHAT_ID = os.getenv("CHAT_ID")
 
-logging.basicConfig(level=logging.INFO)
+bot = Bot(token=TOKEN)
 
-# База вопросов, шуток и загадок
-quiz_questions = [
-    {"question": "Сколько будет 3 + 5?", "answers": ["7", "8", "9"], "correct": "8"},
-    {"question": "Столица Италии?", "answers": ["Рим", "Мадрид", "Париж"], "correct": "Рим"},
-    {"question": "Какой океан самый большой?", "answers": ["Атлантический", "Индийский", "Тихий"], "correct": "Тихий"},
-]
+# Список задач
+tasks = []
+data_file = "tasks.json"
 
-jokes = [
-    "Почему программисты путают Хэллоуин и Рождество? Потому что 31 Oct = 25 Dec.",
-    "Всё ломается. Даже код, который ещё не написал.",
-    "Как зовут программиста-волшебника? Алгоритмович!"
-]
+# ================= Загрузка и сохранение ===================
 
-truth_or_lie_statements = [
-    {"statement": "Солнце — звезда.", "truth": True},
-    {"statement": "Человек может дышать под водой без устройств.", "truth": False},
-    {"statement": "Python — это язык программирования.", "truth": True},
-]
+def load_tasks():
+    global tasks
+    if os.path.exists(data_file):
+        with open(data_file, "r") as f:
+            tasks = json.load(f)
+    else:
+        tasks = []
 
-riddles = [
-    {"question": "Что можно увидеть с закрытыми глазами?", "answers": ["Сон", "Свет", "Ничего"], "correct": "Сон"},
-    {"question": "Что всегда идёт, но никогда не приходит?", "answers": ["Время", "Поезд", "Эхо"], "correct": "Время"},
-]
+def save_tasks():
+    with open(data_file, "w") as f:
+        json.dump(tasks, f, indent=4)
 
-# Главное меню
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        [InlineKeyboardButton("🎯 Викторина", callback_data="quiz")],
-        [InlineKeyboardButton("😂 Анекдот", callback_data="joke")],
-        [InlineKeyboardButton("⏰ Время", callback_data="time")],
-        [InlineKeyboardButton("🎲 Угадай число", callback_data="guess")],
-        [InlineKeyboardButton("✊ Камень/Ножницы/Бумага", callback_data="rps")],
-        [InlineKeyboardButton("🎲 Бросок кубика", callback_data="dice")],
-        [InlineKeyboardButton("🧠 Правда или ложь", callback_data="truthlie")],
-        [InlineKeyboardButton("🕵 Загадка", callback_data="riddle")],
+# =================== Панель управления ====================
+
+def control_panel(update: Update, context: CallbackContext):
+    buttons = [
+        [InlineKeyboardButton("➕ Добавить по интервалу", callback_data="add_interval")],
+        [InlineKeyboardButton("📅 Добавить ежедневное", callback_data="add_daily")],
+        [InlineKeyboardButton("📆 Добавить еженедельное", callback_data="add_weekly")],
+        [InlineKeyboardButton("🗓 Добавить ежемесячное", callback_data="add_monthly")],
+        [InlineKeyboardButton("📋 Список задач", callback_data="show_tasks")]
     ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("Привет! Выбери действие:", reply_markup=reply_markup)
+    markup = InlineKeyboardMarkup(buttons)
+    update.message.reply_text("Панель управления:", reply_markup=markup)
 
-# Обработка кнопок
-async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ================ Обработчик кнопок ===================
+
+def button_handler(update: Update, context: CallbackContext):
     query = update.callback_query
-    await query.answer()
+    query.answer()
 
-    if query.data == "quiz":
-        question = random.choice(quiz_questions)
-        context.user_data['quiz'] = question
-        buttons = [[InlineKeyboardButton(ans, callback_data=f"answer:{ans}")] for ans in question['answers']]
-        await query.edit_message_text(question['question'], reply_markup=InlineKeyboardMarkup(buttons))
+    if query.data == "add_interval":
+        query.edit_message_text("Отправь текст сообщения и интервал в минутах через `|`. Пример:\nПривет! | 15", parse_mode='Markdown')
+        context.user_data["mode"] = "interval"
 
-    elif query.data.startswith("answer:"):
-        selected = query.data.split(":", 1)[1]
-        question = context.user_data.get('quiz')
-        result = "✅ Верно!" if question and selected == question['correct'] else f"❌ Неправильно. Ответ: {question['correct']}"
-        await query.edit_message_text(result)
+    elif query.data == "add_daily":
+        query.edit_message_text("Отправь текст сообщения и время (HH:MM) через `|`. Пример:\nДоброе утро! | 09:00", parse_mode='Markdown')
+        context.user_data["mode"] = "daily"
 
-    elif query.data == "joke":
-        await query.edit_message_text(random.choice(jokes))
+    elif query.data == "add_weekly":
+        query.edit_message_text("Отправь текст сообщения и день недели/время через `|`. Пример:\nОтчёт | Monday 10:00", parse_mode='Markdown')
+        context.user_data["mode"] = "weekly"
 
-    elif query.data == "time":
-        now = datetime.now().strftime("%H:%M:%S %d-%m-%Y")
-        await query.edit_message_text(f"Текущее время: {now}")
+    elif query.data == "add_monthly":
+        query.edit_message_text("Отправь текст сообщения и день месяца/время через `|`. Пример:\nСобрание | 1 10:00", parse_mode='Markdown')
+        context.user_data["mode"] = "monthly"
 
-    elif query.data == "guess":
-        number = random.randint(1, 5)
-        context.user_data['secret'] = number
-        buttons = [[InlineKeyboardButton(str(n), callback_data=f"guess_number:{n}")] for n in range(1, 6)]
-        await query.edit_message_text("Я загадал число от 1 до 5. Попробуй угадать:", reply_markup=InlineKeyboardMarkup(buttons))
+    elif query.data == "show_tasks":
+        text = "Текущие задачи:\n"
+        for idx, task in enumerate(tasks, 1):
+            desc = f"{idx}. [{task['type']}] {task['text'][:20]}..."
+            if task['type'] == "interval":
+                desc += f" каждые {task['interval']} минут"
+            elif task['type'] == "daily":
+                desc += f" каждый день в {task['time']}"
+            elif task['type'] == "weekly":
+                desc += f" каждую {task['weekday']} в {task['time']}"
+            elif task['type'] == "monthly":
+                desc += f" каждый месяц {task['day']} числа в {task['time']}"
+            text += desc + "\n"
+        if not tasks:
+            text = "Нет активных задач."
+        query.edit_message_text(text)
 
-    elif query.data.startswith("guess_number:"):
-        guess = int(query.data.split(":")[1])
-        secret = context.user_data.get('secret')
-        result = "🎉 Ты угадал!" if guess == secret else f"Нет, я загадал {secret}."
-        await query.edit_message_text(result)
+# ================= Добавление задач ===================
 
-    elif query.data == "rps":
-        buttons = [
-            [InlineKeyboardButton("Камень", callback_data="rps_choice:Камень"),
-             InlineKeyboardButton("Ножницы", callback_data="rps_choice:Ножницы"),
-             InlineKeyboardButton("Бумага", callback_data="rps_choice:Бумага")]
-        ]
-        await query.edit_message_text("Выбери свой ход:", reply_markup=InlineKeyboardMarkup(buttons))
+def message_handler(update: Update, context: CallbackContext):
+    mode = context.user_data.get("mode")
 
-    elif query.data.startswith("rps_choice:"):
-        user_choice = query.data.split(":")[1]
-        bot_choice = random.choice(["Камень", "Ножницы", "Бумага"])
-        outcome = "Ничья!"
-        if (user_choice == "Камень" and bot_choice == "Ножницы") or \
-           (user_choice == "Ножницы" and bot_choice == "Бумага") or \
-           (user_choice == "Бумага" and bot_choice == "Камень"):
-            outcome = "Ты победил!"
-        elif user_choice != bot_choice:
-            outcome = "Бот победил!"
-        await query.edit_message_text(f"Ты выбрал: {user_choice}\nБот выбрал: {bot_choice}\n{outcome}")
+    if mode == "interval":
+        try:
+            text, interval = update.message.text.split("|")
+            task = {
+                "text": text.strip(),
+                "interval": int(interval.strip()),
+                "type": "interval",
+                "photo_file_id": None,
+                "video_file_id": None,
+                "last_sent": None
+            }
+            tasks.append(task)
+            save_tasks()
+            update.message.reply_text(f"Задача добавлена: каждые {task['interval']} минут.\nМожешь прислать фото или видео для этого сообщения.")
+            context.user_data["last_task"] = task
+        except:
+            update.message.reply_text("Ошибка формата. Пример:\nСообщение | 15")
 
-    elif query.data == "dice":
-        roll = random.randint(1, 6)
-        await query.edit_message_text(f"Ты бросил кубик и выпало: {roll}")
+    elif mode == "daily":
+        try:
+            text, time_str = update.message.text.split("|")
+            task = {
+                "text": text.strip(),
+                "time": time_str.strip(),
+                "type": "daily",
+                "photo_file_id": None,
+                "video_file_id": None
+            }
+            tasks.append(task)
+            save_tasks()
+            schedule.every().day.at(task["time"]).do(send_task, task=task)
+            update.message.reply_text(f"Ежедневная задача добавлена на {task['time']}. Можешь прислать фото или видео.")
+            context.user_data["last_task"] = task
+        except:
+            update.message.reply_text("Ошибка формата. Пример:\nСообщение | 09:00")
 
-    elif query.data == "truthlie":
-        statement = random.choice(truth_or_lie_statements)
-        context.user_data['truth'] = statement
-        buttons = [
-            [InlineKeyboardButton("Правда", callback_data="truth_answer:True"),
-             InlineKeyboardButton("Ложь", callback_data="truth_answer:False")]
-        ]
-        await query.edit_message_text(statement['statement'], reply_markup=InlineKeyboardMarkup(buttons))
+    elif mode == "weekly":
+        try:
+            text, when = update.message.text.split("|")
+            weekday, time_str = when.strip().split()
+            task = {
+                "text": text.strip(),
+                "weekday": weekday.capitalize(),
+                "time": time_str,
+                "type": "weekly",
+                "photo_file_id": None,
+                "video_file_id": None
+            }
+            tasks.append(task)
+            save_tasks()
+            getattr(schedule.every(), weekday.lower()).at(task["time"]).do(send_task, task=task)
+            update.message.reply_text(f"Еженедельная задача добавлена: {task['weekday']} в {task['time']}. Можешь прислать фото или видео.")
+            context.user_data["last_task"] = task
+        except:
+            update.message.reply_text("Ошибка формата. Пример:\nСообщение | Monday 10:00")
 
-    elif query.data.startswith("truth_answer:"):
-        user_answer = query.data.split(":")[1] == "True"
-        correct = context.user_data.get('truth', {}).get('truth')
-        result = "✅ Верно!" if user_answer == correct else "❌ Неправильно."
-        await query.edit_message_text(result)
+    elif mode == "monthly":
+        try:
+            text, when = update.message.text.split("|")
+            day, time_str = when.strip().split()
+            task = {
+                "text": text.strip(),
+                "day": int(day),
+                "time": time_str,
+                "type": "monthly",
+                "photo_file_id": None,
+                "video_file_id": None,
+                "last_sent_date": None
+            }
+            tasks.append(task)
+            save_tasks()
+            update.message.reply_text(f"Ежемесячная задача добавлена: {task['day']} числа в {task['time']}. Можешь прислать фото или видео.")
+            context.user_data["last_task"] = task
+        except:
+            update.message.reply_text("Ошибка формата. Пример:\nСообщение | 1 10:00")
 
-    elif query.data == "riddle":
-        riddle = random.choice(riddles)
-        context.user_data['riddle'] = riddle
-        buttons = [[InlineKeyboardButton(ans, callback_data=f"riddle_answer:{ans}")] for ans in riddle['answers']]
-        await query.edit_message_text(riddle['question'], reply_markup=InlineKeyboardMarkup(buttons))
+    context.user_data["mode"] = None
 
-    elif query.data.startswith("riddle_answer:"):
-        selected = query.data.split(":")[1]
-        riddle = context.user_data.get('riddle')
-        result = "✅ Правильно!" if riddle and selected == riddle['correct'] else f"❌ Нет, ответ: {riddle['correct']}"
-        await query.edit_message_text(result)
+    # Фото или видео для последней задачи
+    if update.message.photo and context.user_data.get("last_task"):
+        file_id = update.message.photo[-1].file_id
+        context.user_data["last_task"]["photo_file_id"] = file_id
+        context.user_data["last_task"]["video_file_id"] = None
+        save_tasks()
+        update.message.reply_text("Фото добавлено к сообщению.")
 
-async def unknown(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Я тебя не понял. Используй /start для вызова меню.")
+    if update.message.video and context.user_data.get("last_task"):
+        file_id = update.message.video.file_id
+        context.user_data["last_task"]["video_file_id"] = file_id
+        context.user_data["last_task"]["photo_file_id"] = None
+        save_tasks()
+        update.message.reply_text("Видео добавлено к сообщению.")
+
+# ================ Отправка сообщений ===================
+
+def send_task(task):
+    if task.get("photo_file_id"):
+        bot.send_photo(chat_id=CHAT_ID, photo=task["photo_file_id"], caption=task["text"])
+    elif task.get("video_file_id"):
+        bot.send_video(chat_id=CHAT_ID, video=task["video_file_id"], caption=task["text"])
+    else:
+        bot.send_message(chat_id=CHAT_ID, text=task["text"])
+
+    task["last_sent"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    save_tasks()
+
+# ============== Цикл проверки интервалов и месяцев ==============
+
+def task_loop():
+    while True:
+        now = datetime.now()
+
+        for task in tasks:
+            if task["type"] == "interval":
+                last = datetime.strptime(task["last_sent"], "%Y-%m-%d %H:%M:%S") if task.get("last_sent") else None
+                if not last or (now - last) >= timedelta(minutes=task["interval"]):
+                    send_task(task)
+
+            if task["type"] == "monthly":
+                last_date = task.get("last_sent_date")
+                if now.day == task["day"] and now.strftime("%H:%M") == task["time"]:
+                    if last_date != now.strftime("%Y-%m-%d"):
+                        send_task(task)
+                        task["last_sent_date"] = now.strftime("%Y-%m-%d")
+                        save_tasks()
+
+        schedule.run_pending()
+        time.sleep(10)
+
+# ================== Основной запуск ==================
 
 def main():
-    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    load_tasks()
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(handle_buttons))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, unknown))
+    updater = Updater(TOKEN, use_context=True)
+    dp = updater.dispatcher
 
-    print("Бот запущен...")
-    app.run_polling()
+    dp.add_handler(CommandHandler("start", control_panel))
+    dp.add_handler(CallbackQueryHandler(button_handler))
+    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, message_handler))
+    dp.add_handler(MessageHandler(Filters.photo | Filters.video, message_handler))
+
+    for task in tasks:
+        if task["type"] == "daily":
+            schedule.every().day.at(task["time"]).do(send_task, task=task)
+        if task["type"] == "weekly":
+            getattr(schedule.every(), task["weekday"].lower()).at(task["time"]).do(send_task, task=task)
+
+    threading.Thread(target=task_loop, daemon=True).start()
+
+    updater.start_polling()
+    updater.idle()
 
 if __name__ == "__main__":
     main()
