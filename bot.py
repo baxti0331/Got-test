@@ -2,57 +2,71 @@ import logging
 import os
 import wikipedia
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler
+from telegram.ext import (
+    ApplicationBuilder, CommandHandler, ContextTypes,
+    MessageHandler, filters, CallbackQueryHandler
+)
 
 logging.basicConfig(level=logging.INFO)
 
 DEFAULT_LANG = "ru"
-user_languages = {}  # Сохраняем язык для каждого пользователя
-wikipedia.set_lang(DEFAULT_LANG)
+user_languages = {}  # Словарь для хранения языка каждого пользователя
 
 MAX_QUERY_LENGTH = 100
 
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("Русский 🌐", callback_data="setlang_ru"),
+         InlineKeyboardButton("English 🌐", callback_data="setlang_en")]
+    ])
     await update.message.reply_text(
-        "👋 Привет! Я твой Википедия-бот.\n"
-        "Отправь мне любой запрос, и я постараюсь найти информацию.\n"
-        "Команды:\n/help — помощь\n/lang ru или /lang en — смена языка"
+        "👋 Привет! Я Википедия-бот.\n"
+        "Просто напиши мне любой запрос — я найду информацию из Википедии.\n"
+        "👇 Выбери язык:",
+        reply_markup=keyboard
     )
-
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("Русский 🌐", callback_data="setlang_ru"),
+         InlineKeyboardButton("English 🌐", callback_data="setlang_en")]
+    ])
     await update.message.reply_text(
-        "ℹ️ Я ищу информацию из Википедии.\n"
-        "Просто отправь запрос.\n"
-        "Можно менять язык поиска: /lang ru или /lang en"
+        "ℹ️ <b>Возможности бота:</b>\n"
+        "🔍 Поиск информации из Википедии на русском или английском языке.\n"
+        "💡 Если запрос общий — бот предложит уточнения.\n"
+        "🌐 Для смены языка нажмите кнопку ниже.\n\n"
+        "Просто отправьте любое слово или вопрос.\n\n"
+        "<b>Примеры:</b>\n"
+        "- Солнце\n"
+        "- Python programming\n"
+        "- Россия\n",
+        parse_mode="HTML",
+        reply_markup=keyboard
     )
 
+async def set_language_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    user_id = query.from_user.id
 
-async def set_language(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.args:
-        await update.message.reply_text("❗ Укажи язык: /lang ru или /lang en")
-        return
+    if query.data == "setlang_ru":
+        user_languages[user_id] = "ru"
+        await query.answer("Язык установлен: Русский 🌐")
+    elif query.data == "setlang_en":
+        user_languages[user_id] = "en"
+        await query.answer("Language set to: English 🌐")
 
-    lang = context.args[0].lower()
-    if lang in ["ru", "en"]:
-        user_languages[update.effective_user.id] = lang
-        await update.message.reply_text(f"✅ Язык установлен: {lang}")
-    else:
-        await update.message.reply_text("⚠️ Поддерживаются только 'ru' и 'en'")
-
+    await query.edit_message_text("✅ Язык успешно изменён.")
 
 async def answer_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.message.text.strip()
+    query_text = update.message.text.strip()
 
-    if not query:
-        await update.message.reply_text("❗ Пожалуйста, отправь непустой запрос.")
+    if not query_text:
+        await update.message.reply_text("❗ Пожалуйста, отправьте непустой запрос.")
         return
 
-    if len(query) > MAX_QUERY_LENGTH:
-        await update.message.reply_text(
-            f"⚠️ Слишком длинный запрос! Не более {MAX_QUERY_LENGTH} символов."
-        )
+    if len(query_text) > MAX_QUERY_LENGTH:
+        await update.message.reply_text(f"⚠️ Слишком длинный запрос. Не более {MAX_QUERY_LENGTH} символов.")
         return
 
     user_id = update.effective_user.id
@@ -60,74 +74,71 @@ async def answer_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
     wikipedia.set_lang(lang)
 
     try:
-        summary = wikipedia.summary(query, sentences=10)
-        page = wikipedia.page(query)
+        summary = wikipedia.summary(query_text, sentences=5)
+        page = wikipedia.page(query_text)
         url = page.url
 
-        text = f"📚 Вот что я нашёл для тебя:\n\n{summary}\n\n🔗 Подробнее: {url}"
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔗 Читать на Википедии", url=url)]
+        ])
 
-        keyboard = InlineKeyboardMarkup(
-            [[InlineKeyboardButton("Перейти к статье на Википедии", url=url)]]
-        )
-
-        if page.images:
-            await update.message.reply_photo(photo=page.images[0], caption=text, reply_markup=keyboard)
-        else:
-            await update.message.reply_text(text, reply_markup=keyboard)
+        text = f"📚 <b>Вот что я нашёл:</b>\n\n{summary}"
+        await update.message.reply_text(text, parse_mode="HTML", reply_markup=keyboard)
 
     except wikipedia.exceptions.DisambiguationError as e:
         options = e.options[:5]
-        keyboard = InlineKeyboardMarkup(
-            [[InlineKeyboardButton(opt, callback_data=opt)] for opt in options]
-        )
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton(opt, callback_data=f"search_{opt}")]
+            for opt in options
+        ])
         await update.message.reply_text(
-            "🤔 Твой запрос слишком общий. Пожалуйста, выбери уточнение:",
+            "🤔 Ваш запрос слишком общий. Выберите один из вариантов:",
             reply_markup=keyboard
         )
 
     except wikipedia.exceptions.PageError:
         await update.message.reply_text(
-            "😞 Я не нашёл статью по твоему запросу. Попробуй другой запрос."
+            "😞 Статья не найдена. Попробуйте другой запрос."
         )
-    except Exception:
+    except Exception as ex:
+        logging.error(f"Ошибка при запросе: {ex}")
         await update.message.reply_text(
-            "⚠️ Произошла ошибка при обработке запроса. Попробуй позже."
+            "⚠️ Произошла непредвиденная ошибка. Попробуйте позже."
         )
 
+async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
 
-async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query.data
-    await update.callback_query.answer()
+    if query.data.startswith("setlang_"):
+        await set_language_callback(update, context)
+    elif query.data.startswith("search_"):
+        topic = query.data.replace("search_", "")
+        user_id = query.from_user.id
+        lang = user_languages.get(user_id, DEFAULT_LANG)
+        wikipedia.set_lang(lang)
 
-    user_id = update.effective_user.id
-    lang = user_languages.get(user_id, DEFAULT_LANG)
-    wikipedia.set_lang(lang)
+        try:
+            summary = wikipedia.summary(topic, sentences=5)
+            page = wikipedia.page(topic)
+            url = page.url
 
-    try:
-        summary = wikipedia.summary(query, sentences=10)
-        page = wikipedia.page(query)
-        url = page.url
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔗 Читать на Википедии", url=url)]
+            ])
 
-        text = f"📚 Вот что я нашёл:\n\n{summary}\n\n🔗 Подробнее: {url}"
-
-        keyboard = InlineKeyboardMarkup(
-            [[InlineKeyboardButton("Перейти к статье на Википедии", url=url)]]
-        )
-
-        if page.images:
-            await update.callback_query.message.reply_photo(photo=page.images[0], caption=text, reply_markup=keyboard)
-        else:
-            await update.callback_query.message.reply_text(text, reply_markup=keyboard)
-
-    except Exception:
-        await update.callback_query.message.reply_text(
-            "⚠️ Ошибка при попытке получить информацию. Попробуй позже."
-        )
-
+            text = f"📚 <b>Вот уточнённая информация:</b>\n\n{summary}"
+            await query.message.reply_text(text, parse_mode="HTML", reply_markup=keyboard)
+            await query.answer()
+        except Exception as ex:
+            logging.error(f"Ошибка при уточнении запроса: {ex}")
+            await query.message.reply_text(
+                "⚠️ Не удалось получить данные по уточнённому запросу."
+            )
+            await query.answer()
 
 if __name__ == "__main__":
     TOKEN = os.getenv("TELEGRAM_TOKEN")
-    PORT = int(os.getenv("PORT", "8443"))  # Render даёт порт в env
+    PORT = int(os.getenv("PORT", "8443"))
 
     if not TOKEN:
         raise ValueError("Отсутствует TELEGRAM_TOKEN в переменных окружения!")
@@ -136,14 +147,13 @@ if __name__ == "__main__":
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(CommandHandler("lang", set_language))
-    app.add_handler(CallbackQueryHandler(handle_button))
+    app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, answer_question))
 
     WEBHOOK_PATH = f"/{TOKEN}"
     WEBHOOK_URL = f"https://{os.getenv('RENDER_EXTERNAL_HOSTNAME')}{WEBHOOK_PATH}"
 
-    print(f"Устанавливаю Webhook: {WEBHOOK_URL}")
+    logging.info(f"Устанавливаю Webhook: {WEBHOOK_URL}")
 
     app.run_webhook(
         listen="0.0.0.0",
