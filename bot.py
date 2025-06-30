@@ -134,16 +134,16 @@ async def answer_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
         url = page.url
         text = f"{msg['result']}\n\n{summary}"
 
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton(msg['more'], url=url)]
-        ])
-
         image_url = next((img for img in page.images if img.lower().endswith(('.jpg', '.jpeg', '.png'))), None)
 
+        keyboard = InlineKeyboardMarkup(
+            [[InlineKeyboardButton(msg['more'], url=url)]]
+        )
+
         if image_url:
-            await update.message.reply_photo(photo=image_url, caption=text, parse_mode="Markdown", reply_markup=keyboard)
+            await update.message.reply_photo(photo=image_url, caption=text, reply_markup=keyboard)
         else:
-            await update.message.reply_text(text, parse_mode="Markdown", reply_markup=keyboard)
+            await update.message.reply_text(text, reply_markup=keyboard)
 
     except wikipedia.exceptions.DisambiguationError as e:
         options = e.options[:5]
@@ -161,7 +161,7 @@ if __name__ == "__main__":
     RENDER_HOST = os.getenv('RENDER_EXTERNAL_HOSTNAME')
 
     if not TOKEN or not RENDER_HOST:
-        raise ValueError("Отсутствует TELEGRAM_TOKEN или RENDER_EXTERNAL_HOSTNAME в переменных окружения!")
+        raise ValueError("Отсутствует TELEGRAM_TOKEN или RENDER_EXTERNAL_HOSTNAME в переменных окружениях!")
 
     app = ApplicationBuilder().token(TOKEN).build()
 
